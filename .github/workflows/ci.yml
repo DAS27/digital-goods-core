@@ -1,0 +1,29 @@
+name: Reliability checks
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: reliability-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build PHP environment
+        run: docker compose --profile test build tests
+      - name: Syntax checks
+        run: docker compose run --rm --no-deps tests sh scripts/lint.sh
+      - name: Deterministic acceptance and random recovery
+        run: docker compose --profile test run --rm -e RUN_RANDOM_TESTS=1 tests
+      - name: Catalog execution plan
+        run: docker compose --profile test run --rm --no-deps tests php bin/console catalog:benchmark
+      - name: Failure diagnostics
+        if: failure()
+        run: docker compose --profile test logs --tail=200 test-api test-a test-b test-db
+      - name: Stop ephemeral test services
+        if: always()
+        run: docker compose --profile test down

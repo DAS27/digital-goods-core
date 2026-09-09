@@ -1,0 +1,10 @@
+.env
+/var/*
+!/var/.gitkeep
+/vendor/
+__pycache__/
+*.pyc
+.DS_Store
+/work/
+/outputs/
+.phpunit.cache/

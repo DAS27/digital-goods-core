@@ -1,0 +1,167 @@
+name: digital-goods-core
+
+x-env: &env
+  APP_ENV: demo
+  DATABASE_DSN: pgsql:host=db;port=5432;dbname=goods
+  DATABASE_USER: goods
+  DATABASE_PASSWORD: ${DB_PASSWORD:-goods-local-demo}
+  SUPPLIER_A_URL: http://supplier-a:8081
+  SUPPLIER_B_URL: http://supplier-b:8082
+  SUPPLIER_TIMEOUT_MS: ${SUPPLIER_TIMEOUT_MS:-300}
+  BACKOFF_BASE_MS: ${BACKOFF_BASE_MS:-200}
+  BACKOFF_MAX_MS: ${BACKOFF_MAX_MS:-30000}
+  PHP_CLI_SERVER_WORKERS: 8
+
+x-app: &app
+  build: .
+  image: digital-goods-core:local
+  environment: *env
+  init: true
+
+x-test-env: &test-env
+  <<: *env
+  APP_ENV: test
+  DATABASE_DSN: pgsql:host=test-db;port=5432;dbname=goods_test
+  DATABASE_PASSWORD: goods-test-only
+  APP_URL: http://test-api:8080
+  SUPPLIER_A_URL: http://test-a:8081
+  SUPPLIER_B_URL: http://test-b:8082
+  BACKOFF_BASE_MS: 30
+  BACKOFF_MAX_MS: 1000
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: goods
+      POSTGRES_USER: goods
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-goods-local-demo}
+    volumes:
+      - goods-data:/var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U goods -d goods]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  setup:
+    <<: *app
+    command: [php, bin/console, setup]
+    depends_on:
+      db: {condition: service_healthy}
+  api:
+    <<: *app
+    command: [php, -S, '0.0.0.0:8080', -t, public, public/index.php]
+    ports: ['127.0.0.1:${API_PORT:-8080}:8080']
+    depends_on:
+      setup: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://127.0.0.1:8080/health') === false ? 1 : 0);"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  supplier-a:
+    <<: *app
+    environment:
+      <<: *env
+      SUPPLIER_NAME: A
+      PHP_CLI_SERVER_WORKERS: 4
+    command: [php, -S, '0.0.0.0:8081', -t, supplier, supplier/index.php]
+    depends_on:
+      setup: {condition: service_completed_successfully}
+  supplier-b:
+    <<: *app
+    environment:
+      <<: *env
+      SUPPLIER_NAME: B
+      PHP_CLI_SERVER_WORKERS: 4
+    command: [php, -S, '0.0.0.0:8082', -t, supplier, supplier/index.php]
+    depends_on:
+      setup: {condition: service_completed_successfully}
+  worker:
+    <<: *app
+    command: [php, bin/console, worker:run]
+    restart: unless-stopped
+    depends_on:
+      setup: {condition: service_completed_successfully}
+      supplier-a: {condition: service_started}
+      supplier-b: {condition: service_started}
+  app:
+    <<: *app
+    profiles: [tools]
+    depends_on:
+      setup: {condition: service_completed_successfully}
+
+  test-db:
+    image: postgres:16-alpine
+    profiles: [test]
+    environment:
+      POSTGRES_DB: goods_test
+      POSTGRES_USER: goods
+      POSTGRES_PASSWORD: goods-test-only
+    tmpfs: [/var/lib/postgresql/data]
+    healthcheck:
+      test: [CMD-SHELL, pg_isready -U goods -d goods_test]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  test-setup:
+    <<: *app
+    profiles: [test]
+    environment: *test-env
+    command: [php, bin/console, setup]
+    depends_on:
+      test-db: {condition: service_healthy}
+  test-api:
+    <<: *app
+    profiles: [test]
+    environment: *test-env
+    command: [php, -S, '0.0.0.0:8080', -t, public, public/index.php]
+    depends_on:
+      test-setup: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://127.0.0.1:8080/health') === false ? 1 : 0);"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  test-a:
+    <<: *app
+    profiles: [test]
+    environment:
+      <<: *test-env
+      SUPPLIER_NAME: A
+      PHP_CLI_SERVER_WORKERS: 4
+    command: [php, -S, '0.0.0.0:8081', -t, supplier, supplier/index.php]
+    depends_on:
+      test-setup: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://127.0.0.1:8081/health') === false ? 1 : 0);"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  test-b:
+    <<: *app
+    profiles: [test]
+    environment:
+      <<: *test-env
+      SUPPLIER_NAME: B
+      PHP_CLI_SERVER_WORKERS: 4
+    command: [php, -S, '0.0.0.0:8082', -t, supplier, supplier/index.php]
+    depends_on:
+      test-setup: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, php, -r, "exit(@file_get_contents('http://127.0.0.1:8082/health') === false ? 1 : 0);"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+  tests:
+    <<: *app
+    profiles: [test]
+    environment: *test-env
+    command: [sh, scripts/test.sh]
+    depends_on:
+      test-api: {condition: service_healthy}
+      test-a: {condition: service_healthy}
+      test-b: {condition: service_healthy}
+
+volumes:
+  goods-data:

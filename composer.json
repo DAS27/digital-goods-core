@@ -1,0 +1,18 @@
+{
+  "name": "das27/digital-goods-core",
+  "description": "Reliable digital goods checkout with durable payment inbox and idempotent supplier delivery",
+  "type": "project",
+  "license": "proprietary",
+  "require": {
+    "php": ">=8.2",
+    "ext-pdo": "*",
+    "ext-pdo_pgsql": "*",
+    "ext-curl": "*",
+    "ext-json": "*"
+  },
+  "autoload": {"psr-4": {"App\\": "src/"}},
+  "scripts": {
+    "lint": "sh scripts/lint.sh",
+    "test": "sh scripts/test.sh"
+  }
+}

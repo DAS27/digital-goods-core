@@ -1,0 +1,199 @@
+#!/usr/bin/env php
+<?php
+
+declare(strict_types=1);
+
+use App\Delivery\DeliveryWorker;
+use App\Domain\ReconciliationService;
+use App\Http\Input;
+use App\Infrastructure\Config;
+use App\Infrastructure\Database;
+use App\Infrastructure\Log;
+use App\Infrastructure\Migrator;
+use App\Infrastructure\Seeder;
+
+require dirname(__DIR__) . '/bootstrap.php';
+
+function output(array $value): void
+{
+    echo json_encode($value, JSON_THROW_ON_ERROR | JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT) . "\n";
+}
+
+function demoOnly(): void
+{
+    if (!in_array(Config::get('APP_ENV'), ['demo', 'test'], true)) {
+        throw new RuntimeException('Supplier controls and benchmark require APP_ENV=demo or test');
+    }
+}
+
+try {
+    $command = $argv[1] ?? 'help';
+    if ($command === 'help') {
+        output(['commands' => [
+            'setup', 'migrate', 'seed', 'worker:once', 'worker:run', 'reconcile', 'recover',
+            'supplier:mode A|B normal|unavailable|out_of_stock|timeout_after_issue|timeout_before_issue|random [error_rate] [timeout_rate] [delay_ms]',
+            'supplier:restock A|B SKU COUNT', 'catalog:benchmark', 'demo', 'test:sql SQL (APP_ENV=test only)',
+        ]]);
+        exit(0);
+    }
+    if ($command === 'test:sql' && Config::get('APP_ENV') !== 'test') {
+        throw new RuntimeException('test:sql is disabled outside APP_ENV=test');
+    }
+    $db = Database::connect();
+    switch ($command) {
+        case 'setup':
+            output(['migrations' => Migrator::run($db), 'seed' => Seeder::run($db)]);
+            break;
+        case 'migrate':
+            output(Migrator::run($db));
+            break;
+        case 'seed':
+            demoOnly();
+            output(Seeder::run($db));
+            break;
+        case 'test:sql':
+            if (!isset($argv[2])) {
+                throw new InvalidArgumentException('SQL argument is required');
+            }
+            $statement = $db->query($argv[2]);
+            output($statement->columnCount() > 0 ? $statement->fetchAll() : []);
+            break;
+        case 'worker:once':
+            output(['worked' => (new DeliveryWorker($db))->tick()]);
+            break;
+        case 'worker:run':
+            $running = true;
+            if (function_exists('pcntl_async_signals')) {
+                pcntl_async_signals(true);
+                pcntl_signal(SIGTERM, static function () use (&$running): void { $running = false; });
+                pcntl_signal(SIGINT, static function () use (&$running): void { $running = false; });
+            }
+            $worker = new DeliveryWorker($db);
+            $lastRecovery = 0;
+            while ($running) {
+                try {
+                    if (time() - $lastRecovery >= 30) {
+                        (new ReconciliationService($db))->recover(false);
+                        $lastRecovery = time();
+                    }
+                    if (!$worker->tick()) {
+                        usleep(200000);
+                    }
+                } catch (Throwable $error) {
+                    Log::write('worker.retry_after_failure', ['exception' => get_class($error)]);
+                    usleep(500000);
+                    // Reconnect after broken sessions; release of the previous PDO also releases session locks.
+                    $worker = null;
+                    $db = null;
+                    try {
+                        $db = Database::connect();
+                        $worker = new DeliveryWorker($db);
+                    } catch (Throwable) {
+                        usleep(500000);
+                    }
+                }
+            }
+            break;
+        case 'reconcile':
+            output((new ReconciliationService($db))->report());
+            break;
+        case 'recover':
+            output((new ReconciliationService($db))->recover());
+            break;
+        case 'supplier:mode':
+            demoOnly();
+            $provider = $argv[2] ?? '';
+            $mode = $argv[3] ?? '';
+            if (!in_array($provider, ['A', 'B'], true)
+                || !in_array($mode, ['normal', 'unavailable', 'out_of_stock', 'timeout_after_issue', 'timeout_before_issue', 'random'], true)) {
+                throw new InvalidArgumentException('Invalid provider or mode; see help');
+            }
+            $errorRate = filter_var($argv[4] ?? '0', FILTER_VALIDATE_FLOAT);
+            $timeoutRate = filter_var($argv[5] ?? '0', FILTER_VALIDATE_FLOAT);
+            $delay = filter_var($argv[6] ?? '1200', FILTER_VALIDATE_INT);
+            if ($errorRate === false || $timeoutRate === false || $errorRate < 0 || $timeoutRate < 0
+                || $errorRate + $timeoutRate > 1 || $delay === false || $delay < 0 || $delay > 60000) {
+                throw new InvalidArgumentException('Invalid rates or delay');
+            }
+            $statement = $db->prepare('UPDATE supplier.settings SET mode=:mode,error_rate=:errors,timeout_rate=:timeouts,delay_ms=:delay WHERE provider=:provider RETURNING *');
+            $statement->execute(['mode' => $mode, 'errors' => $errorRate, 'timeouts' => $timeoutRate, 'delay' => $delay, 'provider' => $provider]);
+            output($statement->fetch());
+            break;
+        case 'supplier:restock':
+            demoOnly();
+            $provider = $argv[2] ?? '';
+            $sku = Input::identifier($argv[3] ?? null, 'sku');
+            $count = filter_var($argv[4] ?? '', FILTER_VALIDATE_INT);
+            if (!in_array($provider, ['A', 'B'], true) || $count === false || $count < 1 || $count > 10000) {
+                throw new InvalidArgumentException('Expected provider A|B and count 1..10000');
+            }
+            output(Database::transaction($db, static function (PDO $db) use ($provider, $sku, $count): array {
+                $product = $db->prepare('SELECT sku FROM products WHERE sku=:sku FOR UPDATE');
+                $product->execute(['sku' => $sku]);
+                if ($product->fetchColumn() === false) {
+                    throw new InvalidArgumentException('Unknown SKU');
+                }
+                $insert = $db->prepare('INSERT INTO supplier.stock(provider,sku,code) VALUES(:provider,:sku,:code)');
+                for ($i = 0; $i < $count; $i++) {
+                    $insert->execute(['provider' => $provider, 'sku' => $sku, 'code' => 'DEMO-' . strtoupper(bin2hex(random_bytes(12)))]);
+                }
+                $update = $db->prepare('UPDATE products SET available_stock=available_stock+:count WHERE sku=:sku');
+                $update->execute(['count' => $count, 'sku' => $sku]);
+
+                return ['provider' => $provider, 'sku' => $sku, 'added' => $count];
+            }));
+            break;
+        case 'catalog:benchmark':
+            demoOnly();
+            $db->beginTransaction();
+            try {
+                $db->exec("INSERT INTO products(sku,name,type,price_minor,currency,available_stock)
+                    SELECT 'BENCH-'||lpad(i::text,6,'0'),'Synthetic benchmark SKU '||i,
+                    (ARRAY['key','topup','subscription','giftcard'])[1+(i%4)],
+                    100+(i*37%100000),'RUB',10 FROM generate_series(1,20000) i ON CONFLICT(sku) DO NOTHING");
+                $db->exec('ANALYZE products');
+                $count = (int) $db->query('SELECT count(*) FROM products')->fetchColumn();
+                $queries = [
+                    'first_page' => "SELECT sku,name,type,price_minor,currency,available_stock FROM products WHERE active AND available_stock>0 AND type='key' ORDER BY price_minor,sku LIMIT 51",
+                    'cursor_page' => "SELECT sku,name,type,price_minor,currency,available_stock FROM products WHERE active AND available_stock>0 AND type='key' AND (price_minor,sku)>(50000,'BENCH-010000') ORDER BY price_minor,sku LIMIT 51",
+                ];
+                $plans = [];
+                foreach ($queries as $name => $sql) {
+                    $plans[$name] = ['sql' => $sql, 'explain' => json_decode($db->query('EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) ' . $sql)->fetchColumn(), true, 32, JSON_THROW_ON_ERROR)];
+                }
+                output(['database' => $db->query('SELECT version()')->fetchColumn(), 'sku_count' => $count, 'synthetic_rows_rolled_back' => true, 'plans' => $plans]);
+            } finally {
+                $db->rollBack();
+                $db->exec('ANALYZE products');
+            }
+            break;
+        case 'demo':
+            demoOnly();
+            // Run through the same HTTP contract as the test gateway, not direct services.
+            $url = rtrim(Config::get('APP_URL', 'http://api:8080'), '/');
+            $post = static function (string $path, array $body) use ($url): array {
+                $context = stream_context_create(['http' => ['method' => 'POST', 'header' => 'Content-Type: application/json', 'content' => json_encode($body, JSON_THROW_ON_ERROR), 'timeout' => 10, 'ignore_errors' => true]]);
+                $response = file_get_contents($url . $path, false, $context);
+                if ($response === false) {
+                    throw new RuntimeException('Demo HTTP request failed');
+                }
+                $parsed = json_decode($response, true, 32, JSON_THROW_ON_ERROR);
+                if (isset($parsed['error'])) {
+                    throw new RuntimeException('Demo API rejected request');
+                }
+
+                return $parsed;
+            };
+            $order = $post('/orders', ['sku' => 'STEAM-TOPUP-500']);
+            $payment = $post('/webhook/payment', ['event_id' => 'evt_' . bin2hex(random_bytes(12)), 'order_id' => $order['order_id'], 'status' => 'paid', 'amount' => $order['amount'], 'currency' => 'RUB', 'created_at' => gmdate('Y-m-d\TH:i:s\Z')]);
+            output(['order' => $order, 'payment' => $payment, 'get_order' => '/orders/' . $order['order_id']]);
+            break;
+        default:
+            throw new InvalidArgumentException('Unknown command; run help');
+    }
+} catch (Throwable $error) {
+    Log::write('console.failed', ['exception' => get_class($error)]);
+    // Full constraint diagnostics are available only in the isolated test harness.
+    fwrite(STDERR, Config::get('APP_ENV') === 'test' ? $error->getMessage() . "\n" : "Command failed. Check configuration and command arguments.\n");
+    exit(1);
+}

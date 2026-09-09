@@ -1,0 +1,9 @@
+.git
+.env
+var/*
+work
+outputs
+__pycache__
+**/__pycache__
+vendor
+.DS_Store

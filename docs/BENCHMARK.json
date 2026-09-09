@@ -1,0 +1,163 @@
+{
+    "database": "PostgreSQL 16.14 on aarch64-unknown-linux-musl, compiled by gcc (Alpine 15.2.0) 15.2.0, 64-bit",
+    "sku_count": 20052,
+    "synthetic_rows_rolled_back": true,
+    "plans": {
+        "first_page": {
+            "sql": "SELECT sku,name,type,price_minor,currency,available_stock FROM products WHERE active AND available_stock>0 AND type='key' ORDER BY price_minor,sku LIMIT 51",
+            "explain": [
+                {
+                    "Plan": {
+                        "Node Type": "Limit",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Startup Cost": 0.41,
+                        "Total Cost": 14.46,
+                        "Plan Rows": 51,
+                        "Plan Width": 65,
+                        "Actual Startup Time": 0.023,
+                        "Actual Total Time": 0.043,
+                        "Actual Rows": 51,
+                        "Actual Loops": 1,
+                        "Shared Hit Blocks": 56,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0,
+                        "Plans": [
+                            {
+                                "Node Type": "Index Only Scan",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Scan Direction": "Forward",
+                                "Index Name": "catalog_type_price",
+                                "Relation Name": "products",
+                                "Alias": "products",
+                                "Startup Cost": 0.41,
+                                "Total Cost": 1386.28,
+                                "Plan Rows": 5031,
+                                "Plan Width": 65,
+                                "Actual Startup Time": 0.02,
+                                "Actual Total Time": 0.037,
+                                "Actual Rows": 51,
+                                "Actual Loops": 1,
+                                "Index Cond": "(type = 'key'::text)",
+                                "Rows Removed by Index Recheck": 0,
+                                "Heap Fetches": 51,
+                                "Shared Hit Blocks": 56,
+                                "Shared Read Blocks": 0,
+                                "Shared Dirtied Blocks": 0,
+                                "Shared Written Blocks": 0,
+                                "Local Hit Blocks": 0,
+                                "Local Read Blocks": 0,
+                                "Local Dirtied Blocks": 0,
+                                "Local Written Blocks": 0,
+                                "Temp Read Blocks": 0,
+                                "Temp Written Blocks": 0
+                            }
+                        ]
+                    },
+                    "Planning": {
+                        "Shared Hit Blocks": 40,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0
+                    },
+                    "Planning Time": 0.161,
+                    "Triggers": [],
+                    "Execution Time": 0.081
+                }
+            ]
+        },
+        "cursor_page": {
+            "sql": "SELECT sku,name,type,price_minor,currency,available_stock FROM products WHERE active AND available_stock>0 AND type='key' AND (price_minor,sku)>(50000,'BENCH-010000') ORDER BY price_minor,sku LIMIT 51",
+            "explain": [
+                {
+                    "Plan": {
+                        "Node Type": "Limit",
+                        "Parallel Aware": false,
+                        "Async Capable": false,
+                        "Startup Cost": 0.41,
+                        "Total Cost": 25.84,
+                        "Plan Rows": 51,
+                        "Plan Width": 65,
+                        "Actual Startup Time": 0.014,
+                        "Actual Total Time": 0.031,
+                        "Actual Rows": 51,
+                        "Actual Loops": 1,
+                        "Shared Hit Blocks": 55,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0,
+                        "Plans": [
+                            {
+                                "Node Type": "Index Only Scan",
+                                "Parent Relationship": "Outer",
+                                "Parallel Aware": false,
+                                "Async Capable": false,
+                                "Scan Direction": "Forward",
+                                "Index Name": "catalog_type_price",
+                                "Relation Name": "products",
+                                "Alias": "products",
+                                "Startup Cost": 0.41,
+                                "Total Cost": 1188.7,
+                                "Plan Rows": 2383,
+                                "Plan Width": 65,
+                                "Actual Startup Time": 0.013,
+                                "Actual Total Time": 0.028,
+                                "Actual Rows": 51,
+                                "Actual Loops": 1,
+                                "Index Cond": "((type = 'key'::text) AND (ROW(price_minor, sku) > ROW(50000, 'BENCH-010000'::text)))",
+                                "Rows Removed by Index Recheck": 0,
+                                "Heap Fetches": 51,
+                                "Shared Hit Blocks": 55,
+                                "Shared Read Blocks": 0,
+                                "Shared Dirtied Blocks": 0,
+                                "Shared Written Blocks": 0,
+                                "Local Hit Blocks": 0,
+                                "Local Read Blocks": 0,
+                                "Local Dirtied Blocks": 0,
+                                "Local Written Blocks": 0,
+                                "Temp Read Blocks": 0,
+                                "Temp Written Blocks": 0
+                            }
+                        ]
+                    },
+                    "Planning": {
+                        "Shared Hit Blocks": 0,
+                        "Shared Read Blocks": 0,
+                        "Shared Dirtied Blocks": 0,
+                        "Shared Written Blocks": 0,
+                        "Local Hit Blocks": 0,
+                        "Local Read Blocks": 0,
+                        "Local Dirtied Blocks": 0,
+                        "Local Written Blocks": 0,
+                        "Temp Read Blocks": 0,
+                        "Temp Written Blocks": 0
+                    },
+                    "Planning Time": 0.055,
+                    "Triggers": [],
+                    "Execution Time": 0.056
+                }
+            ]
+        }
+    }
+}
